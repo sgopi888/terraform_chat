@@ -4,7 +4,11 @@ This repository serves as a starter template for setting up a FastAPI backend us
 
 ## Features
 
-- Terraform-based infrastructure setup.
+- Terraform-based infrastructure setup (GCP Native).
+- **Phase 2: Agentic RAG** for AI Interview Quiz Prep.
+- **Google ADK** (Agent Development Kit) for multi-agent orchestration.
+- **Vertex AI Search** (Data Stores) for managed vector storage and retrieval.
+- **Gemini 2.5 Flash Lite** integration.
 - Integration with GitHub Actions for continuous integration.
 - Automatic trigger setup for Cloud Build.
 - Secure storage of secrets using Secret Manager.

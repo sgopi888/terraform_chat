@@ -5,6 +5,8 @@ resource "google_cloud_run_v2_service" "default" {
   deletion_protection = false
 
   template {
+    service_account = "terraform-sa@summarize-398910.iam.gserviceaccount.com"
+
     containers {
       image = "gcr.io/${var.gcp_project_id}/fastapi-cloudrun:latest"
       env {

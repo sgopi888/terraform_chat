@@ -1,11 +1,22 @@
 resource "google_cloud_run_v2_service" "default" {
-  name     = "cloudrun-service"
+  name     = "cloudrun-service-v2"
   location = "us-central1"
   ingress  = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
 
   template {
     containers {
       image = "gcr.io/${var.gcp_project_id}/fastapi-cloudrun:latest"
+      env {
+        name = "OPENAI_API_KEY"
+
+        value_source {
+          secret_key_ref {
+            secret  = "openai-api-key"
+            version = "latest"
+          }
+        }
+      }
       resources {
         limits = {
           cpu    = "2"

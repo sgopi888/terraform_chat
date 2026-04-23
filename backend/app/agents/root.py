@@ -1,79 +1,88 @@
 # backend/app/agents/root.py
+# Architecture: Vertex AI RAG (retrieval) + Native OpenAI SDK (reasoning)
+# NO litellm, NO ADK model wrappers — maximum simplicity & reliability
 
 import os
+import vertexai
+from vertexai import rag
+from openai import OpenAI
 from dotenv import load_dotenv
-from google.adk.agents import Agent
-from google.adk.models.lite_llm import LiteLlm  
-from google.adk.tools.retrieval.vertex_ai_rag_retrieval import VertexAiRagRetrieval # 🔥 VERTEX SEARCH
-from google.adk.sessions import InMemorySessionService
-from google.adk.runners import Runner
-from google.genai import types
 
 load_dotenv()
 
-# --- Choice C: The Hybrid Config ---
-PROJECT_ID = "summarize-398910"
-LOCATION = "europe-west4"
-
-# ✅ UPDATED: Your specific Corpus Path
+# ── Config ────────────────────────────────────────────────────────────────────
+PROJECT_ID  = "summarize-398910"
+LOCATION    = "europe-west4"
 CORPUS_PATH = "projects/493443117630/locations/europe-west4/ragCorpora/6917529027641081856"
+OPENAI_MODEL = "gpt-4.1-mini"
 
-# THE VERTEX RETRIEVAL TOOL (Learned from Vertex AI)
-rag_tool = VertexAiRagRetrieval(
-    name="vertex_rag_tool",
-    description="Retrieves relevant context from Vertex AI RAG corpus",
-    rag_resources=[
-        {
-            "rag_corpus": CORPUS_PATH
-        }
-    ]
-)
+# ── Lazy-initialised singletons ───────────────────────────────────────────────
+_vertex_initialised = False
+_openai_client: OpenAI | None = None
 
-# THE OPENAI REASONER (Safe for your Gemini status)
-root_agent = Agent(
-    name="root_agent",
-    model=LiteLlm(model="openai/gpt-5-nano"),
-    tools=[rag_tool], 
-    description="Hybrid AI Assistant (Vertex RAG + OpenAI LLM)",
-    instruction="""You are a professional AI Interview Expert. 
-    1. Use the 'VertexAiRagRetrieval' tool to find facts in the research PDFs.
-    2. Synthesize those facts using your internal knowledge.
-    3. Always cite the research findings when answering."""
-)
 
-session_service = InMemorySessionService()
+def _init_vertex():
+    global _vertex_initialised
+    if not _vertex_initialised:
+        vertexai.init(project=PROJECT_ID, location=LOCATION)
+        _vertex_initialised = True
 
-APP_NAME = "app"
-USER_ID = "user1"
-SESSION_ID = "session1"
 
-runner = Runner(
-    agent=root_agent,
-    app_name=APP_NAME,
-    session_service=session_service
-)
+def _get_openai() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _openai_client
 
-async def run_agent(query: str):
-    """
-    Executes the Hybrid RAG workflow.
-    """
+
+# ── Core pipeline ─────────────────────────────────────────────────────────────
+
+def retrieve_context(query: str) -> str:
+    """Step 1 — pull relevant chunks from Vertex AI RAG."""
+    _init_vertex()
     try:
-        await session_service.create_session(
-            app_name=APP_NAME,
-            user_id=USER_ID,
-            session_id=SESSION_ID
+        response = rag.retrieval_query(
+            rag_resources=[rag.RagResource(rag_corpus=CORPUS_PATH)],
+            text=query,
+            similarity_top_k=5,
         )
-    except:
-        pass 
+        chunks = []
+        for ctx in response.contexts.contexts:
+            chunks.append(ctx.text)
+        return "\n\n---\n\n".join(chunks) if chunks else ""
+    except Exception as e:
+        print(f"[RAG] retrieval failed: {e}")
+        return ""
 
-    content = types.Content(role="user", parts=[types.Part(text=query)])
 
-    async for event in runner.run_async(
-        user_id=USER_ID,
-        session_id=SESSION_ID,
-        new_message=content
-    ):
-        if event.is_final_response():
-            return event.content.parts[0].text
+def call_openai(query: str, context: str) -> str:
+    """Step 2 — send query + retrieved context to OpenAI."""
+    client = _get_openai()
 
-    return "No response"
+    system_prompt = (
+        "You are a professional AI Interview Expert specialising in machine learning research.\n"
+        "When context is provided, ground your answer in it and cite it.\n"
+        "If no context is available, answer from your general knowledge."
+    )
+
+    user_message = query
+    if context:
+        user_message = f"{query}\n\n[Retrieved Context]\n{context}"
+
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message},
+        ],
+        temperature=0.3,
+    )
+    return response.choices[0].message.content
+
+
+# ── Public entry-point called by main.py ─────────────────────────────────────
+
+async def run_agent(query: str) -> str:
+    """Hybrid RAG pipeline: Vertex retrieve → OpenAI reason."""
+    context = retrieve_context(query)
+    return call_openai(query, context)
